@@ -3,10 +3,6 @@
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/signal_set.hpp>
-#include <boost/asio/ssl/host_name_verification.hpp>
-#include <boost/asio/ssl/stream.hpp>
-#include <boost/beast/websocket/ssl.hpp>
-#include <boost/beast/websocket/stream.hpp>
 
 #include "tech/logging.h"
 

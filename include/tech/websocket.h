@@ -5,8 +5,9 @@
 #include <boost/asio/as_tuple.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/io_context.hpp>
-#include <boost/beast/ssl.hpp>
-#include <boost/beast/websocket.hpp>
+#include <boost/asio/ssl/stream.hpp>
+#include <boost/beast/websocket/ssl.hpp>
+#include <boost/beast/websocket/stream.hpp>
 #include <boost/cobalt/promise.hpp>
 #include <boost/cobalt/task.hpp>
 #include <concepts>
