@@ -1,0 +1,78 @@
+name: C++
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/cpp.yml'
+      - 'src/**'
+      - 'include/**'
+      - '**/CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'vcpkg.json'
+      - 'vcpkg/**' # Add vcpkg submodule path to trigger on changes
+
+jobs:
+  configure-vcpkg:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-
+
+      - name: Install vcpkg dependencies
+        run: |
+          ./vcpkg/bootstrap-vcpkg.sh
+          ./vcpkg/vcpkg install
+
+  build:
+    runs-on: ubuntu-latest
+
+    needs: configure-vcpkg
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        build_type: [debug, release]
+
+    env:
+      CC: gcc
+      CXX: g++
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # Restore vcpkg-installed artifacts from the build directory
+      - name: Restore vcpkg cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/vcpkg/
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          fail-on-cache-miss: true
+
+      - name: Configure with CMake
+        run: |
+          cmake --preset ${{ matrix.build_type }} \
+            -DCMAKE_CXX_FLAGS="-Werror"
+
+      - name: Build project
+        run: cmake --build --preset ${{ matrix.build_type }} --parallel $(nproc)
+
+      - name: Unit tests
+        run: ctest --preset ${{ matrix.build_type }}
