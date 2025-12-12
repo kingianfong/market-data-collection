@@ -1,14 +1,9 @@
 # Market Data Collection
 
-This project is a C++23 application for collecting market data. It leverages modern C++ features to provide efficient and reliable data acquisition.
+This project is an exploration of modern C++23, focusing on low-latency design in the context of market data collection.
 
 ## Highlights
 
-*   **Modern C++**: Developed with C++23 for contemporary language features.
-*   **Dependency Management**: Employs vcpkg to manage third-party libraries, ensuring reproducible builds.
-*   **Asynchronous Networking**: Built on Boost.Beast for efficient WebSocket communication and Boost.Cobalt for asynchronous operations using C++20 coroutines.
-*   **Data Serialization**: Uses Glaze for fast JSON parsing and serialization of market data messages.
-*   **Logging**: Integrates Spdlog for fast, flexible, and feature-rich logging.
-*   **Testing**: Includes unit tests with Catch2 to ensure code correctness and reliability.
-*   **Continuous Integration**: Leverages GitHub Actions for automated builds and tests across debug and release configurations, ensuring code quality and stability.
-*   **Efficient Message Buffering**: Implements a highly optimized Single-Producer, Single-Consumer (SPSC) lock-free ring buffer (`SpscBuffers`) using `boost::container::static_vector`, atomic operations with specific memory orders, and cache-line alignment to minimize latency for market data messages.
+*   **Asynchronous C++20 Coroutines**: Using Boost.Cobalt coroutines for non-blocking asynchronous control flow on top of Boost.Beast WebSocket communication.
+*   **Zero-allocation SPSC Queue**: The custom `SpscBuffers` class provides a non-blocking mechanism to buffer variable-length messages between the network and writer threads without runtime heap allocations. Uses **Acquire/Release memory semantics** to guarantee ordering while minimising producer latency.
+*   **Continuous Integration**: Automated CI via GitHub Actions for robust builds and testing for debug and release configurations.
