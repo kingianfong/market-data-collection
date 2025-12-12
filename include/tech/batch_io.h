@@ -201,8 +201,6 @@ concept BatchWriter = requires(T writer) {
   { writer.Flush(TimePoint{}) };
 };
 
-static constexpr int zstd_compression_level = 19;  // >=20 uses more memory
-
 class JsonWriter {
  public:
   explicit JsonWriter(std::string od, const TimePoint now)
