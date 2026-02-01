@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "tech/types.h"

@@ -38,6 +38,7 @@ target_link_libraries(benchmark_spsc PRIVATE
 )
 catch_discover_tests(benchmark_spsc)
 
+add_executable(benchmark_spsc_throughput spsc.benchmark.throughput.cc)
 
 add_executable(collect_ws collect_ws.cc)
 target_link_libraries(collect_ws PRIVATE

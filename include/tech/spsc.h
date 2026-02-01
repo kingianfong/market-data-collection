@@ -1,11 +1,12 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <bit>
+#include <cassert>
 #include <cstring>
 #include <type_traits>
 
-#include "tech/logging.h"
 #include "tech/types.h"
 
 namespace tech {
@@ -141,7 +142,6 @@ class SpscQueue {
 
   alignas(kAlign) std::atomic<size_t> write_bytes_ = 0;        // both threads
   alignas(kAlign) std::atomic<size_t> read_bytes_ = 0;         // both threads
-  LoggerPtr logger_ = GetDefaultLogger();                      // consumer only
   alignas(kAlign) std::array<std::byte, kCapacity> buffer_{};  // both threads
 };
 
