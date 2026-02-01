@@ -1,3 +1,5 @@
+#define NDEBUG
+
 #include "tech/spsc.h"
 
 #include <atomic>
@@ -11,8 +13,8 @@ int main() {
 
   constexpr size_t kNumMessages = 10'000'000;
   constexpr size_t kMessageSize = 256;
-  constexpr int kNumWarmupIterations = 2;
-  constexpr int kNumBenchmarkIterations = 5;
+  constexpr int kNumWarmupIterations = 3;
+  constexpr int kNumBenchmarkIterations = 6;
   constexpr auto kTotalIterations =
       kNumWarmupIterations + kNumBenchmarkIterations;
 

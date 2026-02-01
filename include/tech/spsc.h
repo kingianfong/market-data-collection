@@ -5,6 +5,7 @@
 #include <bit>
 #include <cassert>
 #include <cstring>
+#include <new>
 #include <type_traits>
 
 #include "tech/types.h"
@@ -22,7 +23,7 @@ class SpscQueue {
   };
 
  public:
-  static constexpr size_t kAlign = 128;
+  static constexpr size_t kAlign = 8;
   static constexpr size_t kCapacity = 2Z * 1024 * 1024;
   static_assert(std::popcount(kAlign) == 1);
   static_assert(std::popcount(kCapacity) == 1);
@@ -57,19 +58,14 @@ class SpscQueue {
 
     // check if need to wrap
     if (const auto curr_idx = write_bytes_local % kCapacity;
-        curr_idx + write_len > effective_capacity) {
-      auto& header = GetHeader(write_bytes_local);
-      header.is_padding_for_wrap = true;
+        curr_idx + write_len > effective_capacity) [[unlikely]] {
+      WriteHeader(write_bytes_local, {.is_padding_for_wrap = true});
       write_bytes_local = RoundToNext<kCapacity>(write_bytes_local);
     }
-
-    auto& header = GetHeader(write_bytes_local);
-    header = Header{
-        .msg_len = msg_len,
-        .src_idx = msg.source_index,
-        .seq = msg.recv_seq_num,
-        .ts = msg.recv_ts,
-    };
+    WriteHeader(write_bytes_local, {.msg_len = msg_len,
+                                    .src_idx = msg.source_index,
+                                    .seq = msg.recv_seq_num,
+                                    .ts = msg.recv_ts});
 
     auto* data = GetRawMessageStart(write_bytes_local);
     std::memcpy(data, msg.data, msg_len);
@@ -80,7 +76,7 @@ class SpscQueue {
   }
 
   template <typename Fn>
-  bool TryConsume(const Fn& fn) {
+  [[nodiscard]] bool TryConsume(const Fn& fn) {
     auto read_bytes_local = read_bytes_.load(std::memory_order_relaxed);
     if (read_bytes_local == cached_write_bytes_) [[unlikely]] {
       cached_write_bytes_ = write_bytes_.load(std::memory_order_acquire);
@@ -88,11 +84,14 @@ class SpscQueue {
     if (read_bytes_local == cached_write_bytes_) [[unlikely]] {
       return false;
     }
-    if (GetHeader(read_bytes_local).is_padding_for_wrap) [[unlikely]] {
+
+    Header header{};
+    ReadHeader(read_bytes_local, header);
+    if (header.is_padding_for_wrap) [[unlikely]] {
       read_bytes_local = RoundToNext<kCapacity>(read_bytes_local);
+      ReadHeader(read_bytes_local, header);
     }
 
-    const auto& header = GetHeader(read_bytes_local);
     const auto* data = GetRawMessageStart(read_bytes_local);
 
     fn(StreamMessage{
@@ -119,39 +118,41 @@ class SpscQueue {
     return result;
   }
 
-  Header& GetHeader(const size_t bytes) {
+  // helper to avoid UB from reinterpret cast
+  void WriteHeader(const size_t bytes, const Header& header) {
+    static_assert(std::is_trivially_copyable_v<Header>);
+    static_assert(sizeof(Header) <= 24);
     const auto index = bytes % kCapacity;
-    assert(index + sizeof(Header) <= kCapacity &&
-           "overflows after including header size");
+    assert(index + sizeof(Header) <= kCapacity);
+    auto* ptr = buffer_.data() + index;
+    std::memcpy(ptr, &header, sizeof(Header));
+  }
 
-    // technically UB, use this instead when available:
-    // https://en.cppreference.com/w/cpp/memory/start_lifetime_as.html
-    auto* header = reinterpret_cast<Header*>(buffer_.data() + index);
-    [[maybe_unused]] const auto ptr_val = reinterpret_cast<size_t>(header);
-    assert(ptr_val % kAlign == 0);
-    return *header;
+  // helper to avoid UB from reinterpret cast
+  void ReadHeader(const size_t bytes, Header& header) const {
+    static_assert(std::is_trivially_copyable_v<Header>);
+    const auto index = bytes % kCapacity;
+    assert(index + sizeof(Header) <= kCapacity);
+    const auto* ptr = buffer_.data() + index;
+    std::memcpy(&header, ptr, sizeof(Header));
   }
 
   char* GetRawMessageStart(const size_t bytes) {
-    const auto index = (bytes % kCapacity) + sizeof(Header);
-    assert(index + sizeof(Header) <= kCapacity &&
-           "overflows after including header size");
-
-    [[maybe_unused]] auto& header = GetHeader(bytes);
-    assert(index + header.msg_len <= kCapacity &&
-           "overflows after including message size");
-    // technically UB, use this instead when available:
-    // https://en.cppreference.com/w/cpp/memory/start_lifetime_as.html
-    return reinterpret_cast<char*>(buffer_.data() + index);
+    const auto index = bytes % kCapacity;
+    return buffer_.data() + index + sizeof(Header);
   }
 
-  alignas(kAlign) std::atomic<size_t> write_bytes_ = 0;  // both threads
-  alignas(kAlign) size_t cached_read_bytes_ = 0;         // producer
+#ifdef __cpp_lib_hardware_interference_size
+  static constexpr size_t kCache = std::hardware_destructive_interference_size;
+#else
+  static constexpr size_t kCache = 128;
+#endif
 
-  alignas(kAlign) std::atomic<size_t> read_bytes_ = 0;  // both threads
-  alignas(kAlign) size_t cached_write_bytes_ = 0;       // consumer
-
-  alignas(kAlign) std::array<std::byte, kCapacity> buffer_{};  // both threads
+  alignas(kCache) std::atomic<size_t> write_bytes_ = 0;   // both threads
+  alignas(kCache) size_t cached_read_bytes_ = 0;          // producer
+  alignas(kCache) std::atomic<size_t> read_bytes_ = 0;    // both threads
+  alignas(kCache) size_t cached_write_bytes_ = 0;         // consumer
+  alignas(kCache) std::array<char, kCapacity> buffer_{};  // both threads
 };
 
 }  // namespace tech
