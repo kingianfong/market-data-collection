@@ -9,7 +9,7 @@
 int main() {
   using namespace tech;  // NOLINT
 
-  constexpr size_t kNumMessages = 50'000'000;
+  constexpr size_t kNumMessages = 10'000'000;
   constexpr size_t kMessageSize = 256;
   constexpr int kNumWarmupIterations = 2;
   constexpr int kNumBenchmarkIterations = 5;

@@ -46,7 +46,11 @@ class SpscQueue {
 
     // check if can write
     auto write_bytes_local = write_bytes_.load(std::memory_order_relaxed);
-    if (const auto used = write_bytes_local - read_bytes_;
+    if (const auto used = write_bytes_local - cached_read_bytes_;
+        used + write_len > effective_capacity) [[unlikely]] {
+      cached_read_bytes_ = read_bytes_.load(std::memory_order_acquire);
+    }
+    if (const auto used = write_bytes_local - cached_read_bytes_;
         used + write_len > effective_capacity) [[unlikely]] {
       return false;
     }
@@ -78,11 +82,12 @@ class SpscQueue {
   template <typename Fn>
   bool TryConsume(const Fn& fn) {
     auto read_bytes_local = read_bytes_.load(std::memory_order_relaxed);
-    if (read_bytes_local == write_bytes_.load(std::memory_order_acquire))
-        [[unlikely]] {
+    if (read_bytes_local == cached_write_bytes_) [[unlikely]] {
+      cached_write_bytes_ = write_bytes_.load(std::memory_order_acquire);
+    }
+    if (read_bytes_local == cached_write_bytes_) [[unlikely]] {
       return false;
     }
-
     if (GetHeader(read_bytes_local).is_padding_for_wrap) [[unlikely]] {
       read_bytes_local = RoundToNext<kCapacity>(read_bytes_local);
     }
@@ -140,8 +145,12 @@ class SpscQueue {
     return reinterpret_cast<char*>(buffer_.data() + index);
   }
 
-  alignas(kAlign) std::atomic<size_t> write_bytes_ = 0;        // both threads
-  alignas(kAlign) std::atomic<size_t> read_bytes_ = 0;         // both threads
+  alignas(kAlign) std::atomic<size_t> write_bytes_ = 0;  // both threads
+  alignas(kAlign) size_t cached_read_bytes_ = 0;         // producer
+
+  alignas(kAlign) std::atomic<size_t> read_bytes_ = 0;  // both threads
+  alignas(kAlign) size_t cached_write_bytes_ = 0;       // consumer
+
   alignas(kAlign) std::array<std::byte, kCapacity> buffer_{};  // both threads
 };
 
