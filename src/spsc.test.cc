@@ -193,7 +193,7 @@ TEST_CASE("SpscQueue - Full Queue and Wraparound Multithreaded",
   });
 
   // Consumer thread
-  std::thread consumer([&]() {
+  std::thread consumer([&]() {  // NOLINT(*complexity)
     size_t expected_seq = 0;
 
     while (true) {

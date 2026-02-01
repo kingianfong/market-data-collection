@@ -1,125 +1,115 @@
-
 #include "tech/spsc.h"
 
+#include <fmt/base.h>
+
 #include <atomic>
-#include <catch2/benchmark/catch_benchmark.hpp>
-#include <catch2/catch_test_macros.hpp>
-#include <string>
+#include <chrono>
+#include <numeric>
 #include <thread>
 
-namespace tech {
+int main() {
+  using namespace tech;  // NOLINT
 
-TEST_CASE("SpscQueue - Single Thread Push/Pop", "[!benchmark][SpscQueue]") {
-  auto queue = std::make_unique<SpscQueue>();
-  std::string payload(100, 'x');
+  constexpr size_t kNumMessages = 10'000'000;
+  constexpr size_t kMessageSize = 180;  // from logs
+  constexpr int kNumWarmupIterations = 2;
+  constexpr int kNumBenchmarkIterations = 10;
+  constexpr auto kTotalIterations =
+      kNumWarmupIterations + kNumBenchmarkIterations;
 
-  BENCHMARK("Push and Pop") {
-    StreamMessage msg{
-        .source_index{},
-        .len = static_cast<uint32_t>(payload.size()),
-        .recv_seq_num = 0,
-        .recv_ts = 0,
-        .data = payload.data(),
-    };
+  std::array<char, kMessageSize> dummy_data{};
+  std::iota(dummy_data.begin(), dummy_data.end(), 0);  // NOLINT
 
-    std::ignore = queue->TryPush(msg);
-    return queue->TryConsume([](const auto&) {});
-  };
-}
+  fmt::print("--- SPSC Queue Throughput Benchmark ---\n");
+  fmt::print("Messages to send: {}\n", kNumMessages);
+  fmt::print("Message size: {} bytes\n", kMessageSize);
+  fmt::print("Queue Capacity: {} MB\n", SpscQueue::kCapacity / 1024 / 1024);
 
-TEST_CASE("SpscQueue - Variable Payload Sizes", "[!benchmark][SpscQueue]") {
-  auto queue = std::make_unique<SpscQueue>();
+  std::array<double, kNumBenchmarkIterations> latencies_ms{};
 
-  std::vector<std::string> payloads = {
-      std::string(10, 'a'),
-      std::string(100, 'b'),
-      std::string(1000, 'c'),
-  };
+  fmt::print("\nStarting...\n");
+  for (int i = 0; i < kTotalIterations; ++i) {
+    auto queue = std::make_unique<SpscQueue>();
 
-  BENCHMARK("Small (10B)") {
-    StreamMessage msg{.source_index{},
-                      .len = 10,
-                      .recv_seq_num = 0,
-                      .recv_ts = 0,
-                      .data = payloads[0].data()};
-    std::ignore = queue->TryPush(msg);
-    return queue->TryConsume([](const auto&) {});
-  };
-
-  BENCHMARK("Medium (100B)") {
-    StreamMessage msg{.source_index{},
-                      .len = 100,
-                      .recv_seq_num = 0,
-                      .recv_ts = 0,
-                      .data = payloads[1].data()};
-    std::ignore = queue->TryPush(msg);
-    return queue->TryConsume([](const auto&) {});
-  };
-
-  BENCHMARK("Large (1KB)") {
-    StreamMessage msg{.source_index{},
-                      .len = 1000,
-                      .recv_seq_num = 0,
-                      .recv_ts = 0,
-                      .data = payloads[2].data()};
-    std::ignore = queue->TryPush(msg);
-    return queue->TryConsume([](const auto&) {});
-  };
-}
-
-TEST_CASE("SpscQueue - Throughput", "[!benchmark][SpscQueue]") {
-  constexpr size_t kMessages = 100'000;
-  std::string payload(100, 'x');
-
-  auto queue = std::make_unique<SpscQueue>();
-  std::atomic<bool> done{false};
-  std::atomic<size_t> consumed{0};
-  std::atomic<bool> is_producing{false};
-
-  // Start consumer thread once, outside benchmark
-  std::thread consumer([&]() {
-    const auto fn = [&](const auto&) { consumed.fetch_add(1); };
-    while (!done.load(std::memory_order_acquire)) {
-      while (is_producing.load(std::memory_order_acquire)) {
-        while (queue->TryConsume(fn)) {
-          ;
-        }
+    std::atomic<bool> producer_started = false;
+    std::atomic<bool> consumer_started = false;
+    std::atomic<bool> consumer_done = false;
+    std::jthread consumer{[&] {
+      consumer_started.store(true, std::memory_order_release);
+      while (!producer_started.load(std::memory_order_acquire)) {
+        ;  // busy-wait
       }
-    }
-    // Final drain
-    while (queue->TryConsume(fn)) {
+
+      size_t consumed_count = 0;
+      while (consumed_count < kNumMessages) {
+        std::ignore = queue->TryConsume([&](const StreamMessage& msg) {
+          std::ignore = msg;
+          consumed_count++;
+        });
+      }
+
+      consumer_done.store(true, std::memory_order_release);
+    }};
+
+    while (!consumer_started.load(std::memory_order_acquire)) {
       ;
     }
-  });
+    producer_started.store(true, std::memory_order_release);
+    const auto start_time = std::chrono::steady_clock::now();
+    size_t n_blocked = 0;
 
-  BENCHMARK("Producer-Consumer Throughput") {
-    consumed.store(0, std::memory_order_release);
-    is_producing.store(true, std::memory_order_release);
-
-    for (size_t i = 0; i < kMessages; ++i) {
-      StreamMessage msg{
+    for (size_t i = 0; i < kNumMessages; ++i) {
+      const StreamMessage msg{
           .source_index{},
-          .len = static_cast<uint32_t>(payload.size()),
+          .len = kMessageSize,
           .recv_seq_num = static_cast<int64_t>(i),
-          .recv_ts = 0,
-          .data = payload.data(),
+          .recv_ts{},
+          .data = dummy_data.data(),
       };
 
+      if (queue->TryPush(msg)) [[likely]] {  // success
+        continue;
+      }
+      ++n_blocked;
       while (!queue->TryPush(msg)) {
-        ;
+        ;  // busy-wait for consumer to pop
       }
     }
 
-    // Wait for consumer to catch up
-    while (consumed.load(std::memory_order_acquire) < kMessages) {
+    while (!consumer_done.load(std::memory_order_acquire)) {
+      ;  // busy-wait
     }
 
-    is_producing.store(false, std::memory_order_release);
-    return consumed.load();
-  };
+    const auto end_time = std::chrono::steady_clock::now();
+    const auto duration =
+        std::chrono::duration<double, std::milli>{end_time - start_time};
 
-  done.store(true, std::memory_order_release);
-  consumer.join();
+    if (i < kNumWarmupIterations) {
+      fmt::print("Warmup {}: {:.2f} ms\n", i + 1, duration.count());
+    } else {
+      const auto bm_idx = i - kNumWarmupIterations;
+      latencies_ms[bm_idx] = duration.count();
+      fmt::print("Benchmark {}: {:.2f} ms\n", bm_idx + 1, duration.count());
+    }
+
+    if (n_blocked > 0) {
+      fmt::print("Prouducer blocked {:} times\n", n_blocked);
+    }
+  }
+
+  const auto total_duration_ms =
+      std::accumulate(latencies_ms.begin(), latencies_ms.end(), 0.0);
+  const auto average_duration_ms = total_duration_ms / kNumBenchmarkIterations;
+  const auto messages_per_second =
+      (static_cast<double>(kNumMessages) / average_duration_ms) * 1000.0;
+  const auto gigabytes_per_second =
+      (static_cast<double>(kNumMessages) * kMessageSize) /
+      (average_duration_ms / 1'000.0) / (1024.0 * 1024.0 * 1024.0);
+
+  fmt::print("\n--- Benchmark Results ---\n");
+  fmt::print("Average time per run: {:.2f} ms\n", average_duration_ms);
+  fmt::print("Throughput: {:.2f} million msg/sec\n",
+             messages_per_second / 1'000'000.0);
+  fmt::print("Data Throughput: {:.2f} GB/s\n", gigabytes_per_second);
+  return 0;
 }
-
-}  // namespace tech

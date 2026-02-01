@@ -13,7 +13,6 @@
 namespace tech {
 
 class SpscQueue {
- private:
   struct Header {
     uint32_t msg_len = 0;
     bool is_padding_for_wrap = false;
@@ -22,12 +21,20 @@ class SpscQueue {
     int64_t ts = -1;
   };
 
- public:
-  static constexpr size_t kAlign = 8;
-  static constexpr size_t kCapacity = 2Z * 1024 * 1024;
+#ifdef __cpp_lib_hardware_interference_size
+  static constexpr size_t kCache = std::hardware_destructive_interference_size;
+#else
+  static constexpr size_t kCache = 128;
+#endif
+
+  static constexpr size_t kAvgMsgLenInclHeader = 256;
+  static constexpr size_t kAlign = kCache;  // avoid false sharing
   static_assert(std::popcount(kAlign) == 1);
-  static_assert(std::popcount(kCapacity) == 1);
   static_assert(std::is_trivially_copyable_v<Header>);
+
+ public:
+  static constexpr size_t kCapacity = kAvgMsgLenInclHeader * 64 * 1024;
+  static_assert(std::popcount(kCapacity) == 1);
 
   SpscQueue() = default;
 
@@ -69,9 +76,8 @@ class SpscQueue {
 
     auto* data = GetRawMessageStart(write_bytes_local);
     std::memcpy(data, msg.data, msg_len);
-
-    write_bytes_.store(write_bytes_local + write_len,
-                       std::memory_order_release);
+    const auto next_write_bytes = write_bytes_local + write_len;
+    write_bytes_.store(next_write_bytes, std::memory_order_release);
     return true;
   }
 
@@ -141,12 +147,6 @@ class SpscQueue {
     const auto index = bytes % kCapacity;
     return buffer_.data() + index + sizeof(Header);
   }
-
-#ifdef __cpp_lib_hardware_interference_size
-  static constexpr size_t kCache = std::hardware_destructive_interference_size;
-#else
-  static constexpr size_t kCache = 128;
-#endif
 
   alignas(kCache) std::atomic<size_t> write_bytes_ = 0;   // both threads
   alignas(kCache) size_t cached_read_bytes_ = 0;          // producer

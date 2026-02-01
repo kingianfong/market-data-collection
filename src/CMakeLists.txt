@@ -30,15 +30,10 @@ catch_discover_tests(test_spsc)
 target_compile_options(test_spsc PRIVATE -fsanitize=thread,undefined)
 target_link_options(test_spsc PRIVATE -fsanitize=thread,undefined)
 
-
 add_executable(benchmark_spsc spsc.benchmark.cc)
 target_link_libraries(benchmark_spsc PRIVATE
-    Catch2::Catch2WithMain
     spdlog::spdlog
 )
-catch_discover_tests(benchmark_spsc)
-
-add_executable(benchmark_spsc_throughput spsc.benchmark.throughput.cc)
 
 add_executable(collect_ws collect_ws.cc)
 target_link_libraries(collect_ws PRIVATE

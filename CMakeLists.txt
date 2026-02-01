@@ -37,6 +37,8 @@ add_compile_options(
     -Wpedantic
     -g
     -fno-omit-frame-pointer
+    # need to ensure build and run for same machine
+    -Wno-interference-size
 )
 
 include_directories(include)
