@@ -10,9 +10,6 @@
 
 namespace tech {
 
-constexpr size_t kAverageMessageLength = 180;  // from logs
-constexpr size_t kMaxBufferedMessages = 256ULL * 1024;
-
 class SpscQueue {
  private:
   struct Header {

@@ -99,10 +99,7 @@ TEST_CASE("SpscQueue - Variable Length Payloads", "[SpscQueue]") {
   auto queue = std::make_unique<SpscQueue>();
 
   std::vector<std::string> messages = {
-      "a",
-      "short",
-      std::string(100, 'x'),
-      std::string(kAverageMessageLength * 2, 'y'),
+      "a", "short", std::string(100, 'x'), std::string(512, 'y'),
       "",  // empty message
   };
 
@@ -157,6 +154,73 @@ TEST_CASE("SpscQueue - No Dangling References", "[SpscQueue]") {
       CHECK(msg.raw_message() == std::to_string(i));
     }));
   }
+}
+
+TEST_CASE("SpscQueue - Full Queue and Wraparound Multithreaded",
+          "[SpscQueue]") {
+  auto queue = std::make_unique<SpscQueue>();
+
+  constexpr size_t kNumMessages = 1'000'000;
+  constexpr size_t kPayloadSize = 512;
+
+  std::atomic<bool> producer_done{false};
+  std::atomic<size_t> messages_pushed{0};
+  std::atomic<size_t> messages_consumed{0};
+
+  // Producer thread
+  std::thread producer([&]() {
+    std::string payload(kPayloadSize, 'x');
+
+    for (size_t i = 0; i < kNumMessages; ++i) {
+      StreamMessage msg{
+          .source_index{},
+          .len = static_cast<uint32_t>(payload.size()),
+          .recv_seq_num = static_cast<int64_t>(i),
+          .recv_ts = static_cast<int64_t>(i * 1000),
+          .data = payload.data(),
+      };
+
+      // Spin until we can push
+      while (!queue->TryPush(msg)) {
+        std::this_thread::yield();
+      }
+
+      messages_pushed.fetch_add(1, std::memory_order_release);
+    }
+
+    producer_done.store(true, std::memory_order_release);
+  });
+
+  // Consumer thread
+  std::thread consumer([&]() {
+    size_t expected_seq = 0;
+
+    while (true) {
+      bool consumed = queue->TryConsume([&](const StreamMessage& msg) {
+        CHECK(msg.recv_seq_num == static_cast<int64_t>(expected_seq));
+        CHECK(msg.recv_ts == static_cast<int64_t>(expected_seq * 1000));
+        CHECK(msg.len == kPayloadSize);
+
+        ++expected_seq;
+        messages_consumed.fetch_add(1, std::memory_order_release);
+      });
+
+      if (!consumed) {
+        // Check if producer is done and queue is empty
+        if (producer_done.load(std::memory_order_acquire) &&
+            !queue->TryConsume([](const auto&) {})) {
+          break;
+        }
+        std::this_thread::yield();
+      }
+    }
+  });
+
+  producer.join();
+  consumer.join();
+
+  REQUIRE(messages_pushed.load() == kNumMessages);
+  REQUIRE(messages_consumed.load() == kNumMessages);
 }
 
 }  // namespace tech
