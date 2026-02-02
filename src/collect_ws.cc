@@ -22,6 +22,7 @@
 #include "tech/batch_io.h"
 #include "tech/defer.h"
 #include "tech/logging.h"
+#include "tech/spsc.h"
 #include "tech/websocket.h"
 
 enum MessageType : tech::MessageTypeIndex {
@@ -55,6 +56,8 @@ struct glz::meta<tech::websocket::StreamContext> {
 namespace tech::websocket {
 
 namespace {
+
+constexpr auto kMaxBufferedMessages = 256Z * 1024;
 
 constexpr std::string_view GetStreamName(const MessageType msg_type) {
   switch (msg_type) {
@@ -151,7 +154,7 @@ int main() {
       MessageType::book_ticker,
   };
 
-  auto buffers = std::make_unique<SpscBuffers>();
+  auto queue = std::make_unique<SpscQueue>();
   const auto handle_ws_message = [&](const WsMessage& msg) {
     const auto& ws_ctx = msg.ws_ctx.get();
 
@@ -173,12 +176,12 @@ int main() {
         .data = msg.raw_message.data(),
     };
 
-    if (buffers->TryPush(to_push)) [[likely]] {
+    if (queue->TryPush(to_push)) [[likely]] {
       return;
     }
 
     LOG_WARNING(logger, "buffer full");
-    while (!buffers->TryPush(to_push)) {
+    while (!queue->TryPush(to_push)) {
       ;  // busy-wait because latency-sensitive
     }
     LOG_WARNING(logger, "buffer ok");
@@ -213,30 +216,24 @@ int main() {
 
   auto disk_writer = JsonWriter{
       out_dir + "messages",
-      std::chrono::system_clock::now(),
+      kMaxBufferedMessages,
   };
   const auto push_writer = [&disk_writer](const auto& msg) {
     disk_writer.Push(msg);
   };
   const auto flush_messages = Defer{[&] {
-    buffers->FlushAll(push_writer);
-    disk_writer.Flush(std::chrono::system_clock::now());
+    while (queue->TryConsume(push_writer)) {
+      ;  // drain queue
+    }
   }};
   const auto consumer_thread = std::jthread{[&, logger] {
     assert(std::this_thread::get_id() != run_ctx.network_thread_id);
-
     LOG_WARNING(logger, "writer thread started");
-
     while (run_ctx.active_streams.load(std::memory_order_relaxed) > 0) {
-      if (buffers->TryConsume(push_writer)) {
-        LOG_INFO(logger, "flush starting");
-        disk_writer.Flush(std::chrono::system_clock::now());
-        LOG_INFO(logger, "flush done");
-      } else {
+      if (!queue->TryConsume(push_writer)) {
         std::this_thread::yield();
       }
     }
-
     LOG_WARNING(logger, "writer thread stopping");
   }};
 
